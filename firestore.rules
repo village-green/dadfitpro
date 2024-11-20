@@ -1,0 +1,87 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isValidUserProfile() {
+      let requiredFields = ['email', 'displayName', 'createdAt', 'updatedAt'];
+      return request.resource.data.keys().hasAll(requiredFields);
+    }
+
+    function isValidUpvoteUpdate(existing, updated) {
+      let addedUpvote = updated.upvotes.removeAll(existing.upvotes).size() <= 1;
+      let removedUpvote = existing.upvotes.removeAll(updated.upvotes).size() <= 1;
+      return addedUpvote && removedUpvote;
+    }
+
+    // Admin collection
+    match /admins/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow get: if isAuthenticated();
+      allow list: if isAdmin();
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUserProfile();
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Products collection
+    match /products/{productId} {
+      allow read: if true;
+      // Allow admins full write access
+      allow write: if isAdmin();
+      // Allow authenticated users to update only the upvotes field
+      allow update: if isAuthenticated() 
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['upvotes', 'updatedAt'])
+        && isValidUpvoteUpdate(resource.data, request.resource.data)
+        && (
+          // User can only add/remove their own ID
+          request.resource.data.upvotes.removeAll(resource.data.upvotes).hasOnly([request.auth.uid]) ||
+          resource.data.upvotes.removeAll(request.resource.data.upvotes).hasOnly([request.auth.uid])
+        );
+    }
+
+    // Reviews collection
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isAuthenticated();
+      allow update, delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    // Transformation stories collection
+    match /transformationStories/{storyId} {
+      allow read: if true;
+      allow create: if isAuthenticated();
+      allow update, delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    // Exercise collection
+    match /exercises/{exerciseId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Workout collection
+    match /workouts/{workoutId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}
